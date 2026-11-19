@@ -2,16 +2,29 @@
 
 Modèle de départ léger en PHP natif fournissant une classe `Database` basée autour de **PDO**, avec chargement automatique des variables d'environnement depuis un fichier `.env`,
 plus un modèle de départ de la classe `SessionManager` pour la gestion des sessions PHP et de `CookieManager` pour la gestion des cookies PHP.
+Le kit inclut aussi une architecture **MRC** (Model – Resource – Controller) avec un routeur, pour construire une API JSON (voir [Architecture MRC](#architecture-mrc-model--resource--controller)).
 
 ## Structure du modèle
 
 ```text
+├── index.php                 # Point d'entrée : déclaration des routes
+├── autoload.php              # Chargement automatique des classes
+├── .env.example              # Modèle de configuration des identifiants SQL
 ├── db/
 │   └── Database.php          # Classe Singleton de connexion PDO + parseur .env intégré
 ├── core/
+│   ├── Router.php            # Routeur HTTP (routes, paramètres dynamiques)
+│   ├── Controller.php        # Classe de base des contrôleurs
+│   ├── Model.php             # Classe de base des modèles (accès à la base)
+│   ├── Resource.php          # Classe de base des ressources (formatage JSON)
 │   ├── SessionManager.php    # Classe Singleton de gestion de session PHP
 │   └── CookieManager.php     # Classe Singleton de gestion des cookies PHP
-├── .env.example              # Modèle de configuration des identifiants SQL
+├── controllers/
+│   └── WelcomeController.php # Exemple de contrôleur
+├── models/
+│   └── Welcome.php           # Exemple de modèle
+└── resources/
+    └── WelcomeResource.php   # Exemple de ressource
 ```
 
 ## Démarrage rapide
@@ -28,6 +41,8 @@ require_once 'core/CookieManager.php';
 use core\SessionManager;
 use core\CookieManager;
 ```
+
+> Avec l'architecture MRC, `autoload.php` charge automatiquement les classes : les `require_once` ne sont alors plus nécessaires.
 
 > Les trois classes sont des **Singletons** : on ne les instancie jamais avec `new`, on passe toujours par `getInstance()`. Le clonage est interdit (une `Exception` est levée).
 
@@ -311,3 +326,256 @@ $cookies->remove('theme');
 - Un objet est restitué sous forme de **tableau associatif** par `get()`. Une valeur JSON scalaire (ex. `"123"`) est renvoyée telle quelle, en chaîne.
 - Le flag `Secure` n'est pas défini : en production sous HTTPS, pensez à l'ajouter dans `setcookie()`.
 - Ne jamais stocker de donnée sensible (mot de passe, jeton privé) dans un cookie : utilisez la session.
+
+---
+
+## Architecture MRC (Model – Resource – Controller)
+
+Le kit propose une architecture légère pour construire une **API JSON** en séparant les responsabilités. Le trajet d'une requête :
+
+```text
+Requête HTTP → index.php → Router → Controller → Model → Resource → Réponse JSON
+```
+
+| Couche       | Dossier        | Namespace      | Rôle                                                        |
+|--------------|----------------|----------------|-------------------------------------------------------------|
+| `Controller` | `controllers/` | `controllers`  | Reçoit la requête et orchestre le travail                   |
+| `Model`      | `models/`      | `models`       | Accède aux données (base de données)                        |
+| `Resource`   | `resources/`   | `resources`    | Formate les données brutes et envoie la réponse JSON        |
+
+Les classes de base à étendre (`Controller`, `Model`, `Resource`) ainsi que le `Router` se trouvent dans `core/`.
+
+### Point d'entrée et autoload
+
+`index.php` charge l'autoload, déclare les routes puis lance le routeur :
+
+```php
+require_once __DIR__ . '/autoload.php';
+
+use core\Router;
+
+$router = new Router('php-kit');   // préfixe d'URL à ignorer (optionnel)
+
+$router->addRoute('', 'controllers\WelcomeController@show', 'GET');
+
+$router->route(trim($_SERVER['REQUEST_URI'], '/'));
+```
+
+`autoload.php` charge les classes automatiquement, il n'y a donc **aucun `require` à écrire** :
+
+- Une classe avec namespace est cherchée au chemin correspondant : `models\Welcome` → `models/Welcome.php`.
+- Une classe sans namespace (ex. `Database`) est cherchée dans `core/`, `db/`, `controllers/`, `models/` puis `resources/`.
+
+> Convention à respecter : **namespace = nom du dossier** et **nom du fichier = nom de la classe**.
+
+---
+
+### Router
+
+| Méthode                                       | Description                                                            |
+|-----------------------------------------------|------------------------------------------------------------------------|
+| `new Router($prefix = '')`                    | Crée le routeur, avec un préfixe d'URL optionnel                       |
+| `addRoute($uri, $action, $httpMethod = 'ANY')`| Déclare une route                                                      |
+| `route($url, $requestMethod = null)`          | Trouve la route correspondante et exécute l'action                     |
+
+```php
+$router->addRoute('users',      'controllers\UserController@index', 'GET');
+$router->addRoute('users/{id}', 'controllers\UserController@show',  'GET');
+$router->addRoute('users',      'controllers\UserController@store', 'POST');
+```
+
+Règles de fonctionnement :
+- **Action** : au format `Namespace\Controller@methode`, avec le nom de classe complet.
+- **Paramètres dynamiques** : `{id}` capture un segment d'URL (sans `/`). Les valeurs sont passées dans l'ordre à la méthode du contrôleur, sous forme de **chaînes** : `/users/5` appelle `show('5')`.
+- **Méthodes HTTP** : `GET`, `POST`, `PUT`, `DELETE` ou `ANY` (par défaut, accepte toutes les méthodes).
+- **Préfixe** : avec `new Router('php-kit')`, l'URL `/php-kit/users` est résolue comme `users`. Utile quand le projet est dans un sous-dossier.
+- **Ordre** : les routes sont testées dans l'ordre de déclaration, la première qui correspond est utilisée.
+- **Query string** : `?page=2` est ignorée par le routeur et reste lisible via `$_GET`.
+- **Route introuvable** : réponse `404` en **texte brut** (`404 - Page non trouvée`).
+- **Erreurs de configuration** : une `Exception` est levée si l'action ne contient pas de `@`, ou si le contrôleur ou la méthode n'existe pas.
+
+---
+
+### Controller
+
+Un contrôleur étend `core\Controller` et expose une méthode par action.
+
+```php
+namespace controllers;
+
+use core\Controller;
+
+class UserController extends Controller
+{
+    public function show($id) { /* ... */ }
+}
+```
+
+Ce que la classe de base fournit :
+
+| Élément          | Description                                                                 |
+|------------------|-----------------------------------------------------------------------------|
+| `$this->session` | Instance de `SessionManager`                                                |
+| `$this->cookies` | Instance de `CookieManager`                                                 |
+| `getInput()`     | Retourne les données envoyées par le client : corps JSON (ex. `fetch`), sinon `$_POST` |
+
+```php
+$data = $this->getInput();                 // ['nom' => 'Toto', ...]
+$userId = $this->session->get('user_id');
+```
+
+> Le routeur instancie le contrôleur sans argument. Si tu définis un constructeur, appelle `parent::__construct()` pour conserver `$this->session` et `$this->cookies`.
+
+---
+
+### Model
+
+Un modèle étend `core\Model` et regroupe les requêtes d'une table ou d'un domaine. Il retourne des **tableaux bruts**, avec les noms de colonnes de la base.
+
+La classe de base fournit `$this->db`, l'instance de [`Database`](#database) : toutes les méthodes PDO et `transaction()` y sont disponibles.
+
+```php
+$stmt = $this->db->prepare('SELECT * FROM users WHERE user_id = ?');
+$stmt->execute([$id]);
+return $stmt->fetch();
+```
+
+---
+
+### Resource
+
+Une ressource étend `core\Resource` et transforme les données brutes en format public de l'API : renommage des clés, filtrage des champs sensibles (ex. mot de passe). Le client ne voit ainsi jamais la structure de la base.
+
+Le tableau brut reçu par le constructeur est disponible dans `$this->resource`. Il faut définir `toArray()` :
+
+```php
+public function toArray(): array
+{
+    return [
+        'message' => $this->resource['pk_msg'],
+        'version' => $this->resource['pk_app_ver'],
+    ];
+}
+```
+
+| Méthode                                       | Description                                                                       |
+|-----------------------------------------------|-----------------------------------------------------------------------------------|
+| `toArray()`                                   | **À définir** : renommage / filtrage des clés                                     |
+| `send($status = 200)`                         | Envoie **un** élément en JSON                                                     |
+| `Resource::collection($items, $status = 200)` | Méthode statique : envoie une **liste** (applique `toArray()` à chaque élément)   |
+| `Resource::error($message, $status = 400)`    | Méthode statique : envoie un élément en JSON avec un message d'erreur |
+
+```php
+(new UserResource($user))->send();         // 200
+(new UserResource($user))->send(201);      // 201 Created
+UserResource::collection($users);          // tableau d'éléments
+```
+
+> `send()` et `collection()` envoient l'en-tête `Content-Type: application/json; charset=utf-8` puis terminent le script avec `exit` : aucun code n'est exécuté après l'envoi, et il n'y a qu'**une seule réponse par requête**.
+
+---
+
+### Exemple fourni : `GET /php-kit/`
+
+Le contrôleur `WelcomeController` récupère les données du modèle `Welcome` et les passe à `WelcomeResource` :
+
+```php
+function show()
+{
+    new WelcomeResource(new Welcome()->getInfo())->send();
+}
+```
+
+Le modèle retourne `['pk_msg' => ..., 'pk_app_ver' => ...]`, la ressource renomme les clés, et la réponse est :
+
+```json
+{ "message": "Bienvenue sur API PHP Kit", "version": "1.0.2" }
+```
+
+> La syntaxe `new Welcome()->getInfo()` (sans parenthèses autour du `new`) nécessite **PHP 8.4**. Avant : `(new Welcome())->getInfo()`.
+
+---
+
+### Ajouter un nouvel endpoint (pas à pas)
+
+Exemple : lister les utilisateurs et en afficher un.
+
+**1. Le modèle** : `models/User.php`
+
+```php
+namespace models;
+
+use core\Model;
+
+class User extends Model
+{
+    public function getAll(): array
+    {
+        return $this->db->query('SELECT user_id, user_nom FROM users')->fetchAll();
+    }
+
+    public function getById($id)
+    {
+        $stmt = $this->db->prepare('SELECT user_id, user_nom FROM users WHERE user_id = ?');
+        $stmt->execute([$id]);
+        return $stmt->fetch();
+    }
+}
+```
+
+**2. La ressource** : `resources/UserResource.php`
+
+```php
+namespace resources;
+
+use core\Resource;
+
+class UserResource extends Resource
+{
+    public function toArray(): array
+    {
+        return [
+            'id'  => $this->resource['user_id'],
+            'nom' => $this->resource['user_nom'],
+        ];
+    }
+}
+```
+
+**3. Le contrôleur** : `controllers/UserController.php`
+
+```php
+namespace controllers;
+
+use core\Controller;
+use models\User;
+use resources\UserResource;
+
+class UserController extends Controller
+{
+    public function index()
+    {
+        UserResource::collection((new User())->getAll());
+    }
+
+    public function show($id)
+    {
+        (new UserResource((new User())->getById($id)))->send();
+    }
+}
+```
+
+**4. Les routes** : dans `index.php`
+
+```php
+$router->addRoute('users',      'controllers\UserController@index', 'GET');
+$router->addRoute('users/{id}', 'controllers\UserController@show',  'GET');
+```
+
+Résultat : `GET /php-kit/users` renvoie la liste, `GET /php-kit/users/5` appelle `show('5')`.
+
+### Bon à savoir
+
+- Toutes les requêtes doivent arriver sur `index.php` : le serveur doit rediriger les URL vers ce fichier (réécriture d'URL, par exemple via `.htaccess` sous Apache), sinon seule la racine fonctionne.
+- Si `getById()` ne trouve rien, `fetch()` retourne `false` : prévoir ce cas avant de créer la ressource.
+- Pour renvoyer une erreur JSON, passer le message et le statut à `Resource::error()` avant de créer la ressource.

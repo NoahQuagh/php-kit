@@ -1,13 +1,15 @@
 <?php
 
 namespace core;
-use Database;
 
 abstract class Controller
 {
     protected SessionManager $session;
     protected CookieManager $cookies;
 
+    /**
+     * Initialise le contrôleur en récupérant les instances uniques de gestion des sessions et des cookies
+     */
     public function __construct()
     {
         $this->session = SessionManager::getInstance();
