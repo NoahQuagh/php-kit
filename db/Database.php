@@ -1,5 +1,5 @@
 <?php
-//placez ce fichier dans un dossier db ou autre dossier prévu pour
+
 $envPath = __DIR__ . '/../.env';
 
 if (file_exists($envPath)) {
@@ -21,7 +21,7 @@ if (file_exists($envPath)) {
  * Classe Singleton de connexion à un serveur MySQL
  *
  * @author  Noah Quaghebeur
- * @version 1.0
+ * @version 1.1
  */
 class Database
 {
@@ -89,5 +89,32 @@ class Database
             self::$Instance = new self();
         }
         return self::$Instance;
+    }
+
+    /**
+     * Exécute un ensemble d'opérations dans une transaction SQL sécurisée
+     *
+     * @param callable $callback Fonction recevant l'instance Database en paramètre
+     * @return mixed La valeur de retour du callback
+     * @throws Throwable En cas d'erreur, annule la transaction et relance l'exception
+     */
+    public function transaction(callable $callback)
+    {
+        if (self::$PDO === null) {
+            self::__construct();
+        }
+
+        self::$PDO->beginTransaction();
+
+        try {
+            $result = $callback($this);
+            self::$PDO->commit();
+            return $result;
+        } catch (\Throwable $e) {
+            if (self::$PDO->inTransaction()) {
+                self::$PDO->rollBack();
+            }
+            throw $e;
+        }
     }
 }
