@@ -5,13 +5,11 @@ use Database;
 
 abstract class Controller
 {
-    protected Database $db;
     protected SessionManager $session;
     protected CookieManager $cookies;
 
     public function __construct()
     {
-        $this->db      = Database::getInstance();
         $this->session = SessionManager::getInstance();
         $this->cookies = CookieManager::getInstance();
     }

@@ -11,6 +11,7 @@ spl_autoload_register(function ($class) {
         'core/',
         'db/',
         'controllers/',
+        'models/',
         'resources/'
     ];
 
