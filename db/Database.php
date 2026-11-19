@@ -31,13 +31,18 @@ class Database
     /**
      * Constructeur défini en privé créant une connexion MySQL
      */
-    private function __construct(){
+    private function __construct()
+    {
+        if (empty($_ENV['DB_HOST']) || empty($_ENV['DB_NAME'])) {
+            return;
+        }
+
         $dsn = sprintf(
             'mysql:host=%s;port=%s;dbname=%s;charset=%s',
             $_ENV['DB_HOST'],
-            $_ENV['DB_PORT'],
+            $_ENV['DB_PORT'] ?? '3306',
             $_ENV['DB_NAME'],
-            $_ENV['DB_CHARSET']
+            $_ENV['DB_CHARSET'] ?? 'utf8mb4'
         );
 
         $options = [
@@ -46,7 +51,7 @@ class Database
             PDO::ATTR_EMULATE_PREPARES   => false,
         ];
 
-        self::$PDO = new PDO($dsn, $_ENV['DB_USER'], $_ENV['DB_PASS'], $options);
+        self::$PDO = new PDO($dsn, $_ENV['DB_USER'] ?? '', $_ENV['DB_PASS'] ?? '', $options);
     }
 
     /**
@@ -71,12 +76,17 @@ class Database
      * @param type $method
      * @param type $params
      */
-    public function __call($method, $params) {
-        if(self::$PDO == NULL){
-            self::__construct();
+    public function __call($method, $params)
+    {
+        if (self::$PDO === NULL) {
+            $this->__construct();
         }
 
-        return call_user_func_array(array(self::$PDO, $method), $params);
+        if (self::$PDO === NULL) {
+            throw new Exception("Impossible d'exécuter '$method' : la base de données n'est pas configurée (.env manquant ou incomplet).");
+        }
+
+        return call_user_func_array([self::$PDO, $method], $params);
     }
 
     /**
